@@ -38,6 +38,20 @@
                     </StackPanel>
                 </Grid>
 
+                <!-- On / paused -->
+                <ui:CardControl Margin="0,0,0,12" Padding="20,16">
+                    <ui:CardControl.Icon>
+                        <ui:SymbolIcon x:Name="StateIcon" Symbol="CheckmarkCircle24" FontSize="28" />
+                    </ui:CardControl.Icon>
+                    <ui:CardControl.Header>
+                        <StackPanel>
+                            <ui:TextBlock x:Name="StateTitle" FontTypography="BodyStrong" FontSize="16" />
+                            <ui:TextBlock x:Name="StateText" Appearance="Secondary" FontTypography="Caption" TextWrapping="Wrap" />
+                        </StackPanel>
+                    </ui:CardControl.Header>
+                    <ui:ToggleSwitch x:Name="ActiveSwitch" OnContent="On" OffContent="Paused" />
+                </ui:CardControl>
+
                 <!-- How it works -->
                 <ui:Card Padding="20" Margin="0,0,0,24">
                     <Grid>

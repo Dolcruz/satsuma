@@ -30,6 +30,16 @@ public sealed class Settings
 
     public bool FirstRunDone { get; set; }
 
+    /// <summary>Gestures and shortcut are off. Remembered across restarts.</summary>
+    public bool Paused { get; set; }
+
+    public static void SetPaused(bool paused)
+    {
+        if (Current.Paused == paused) return;
+        Current.Paused = paused;
+        Save();
+    }
+
     [JsonIgnore]
     public static string Folder { get; } = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Satsuma");
 

@@ -55,6 +55,8 @@ public partial class SettingsWindow
         ToolsKey.SelectedIndex = Array.FindIndex(Keys, k => k.key == s.ToolsKey);
         ActionsKey.SelectedIndex = Array.FindIndex(Keys, k => k.key == s.ActionsKey);
 
+        ActiveSwitch.IsChecked = !s.Paused;
+        UpdateState();
         Shortcut.IsChecked = s.KeyboardShortcutEnabled;
         ContextMenuSwitch.IsChecked = s.ExplorerContextMenu;
         Reveal.IsChecked = s.RevealResultInExplorer;
@@ -70,6 +72,19 @@ public partial class SettingsWindow
         UpdateLabels();
         UpdateFfmpeg();
         _loading = false;
+    }
+
+    void UpdateState()
+    {
+        bool on = !Settings.Current.Paused;
+        StateTitle.Text = on ? "Satsuma is on" : "Satsuma is paused";
+        StateText.Text = on
+            ? "Drag a file and tap a key anytime. Satsuma starts with Windows and waits in the tray."
+            : "Gestures and the keyboard shortcut are off until you switch Satsuma back on.";
+        StateIcon.Symbol = on ? Wpf.Ui.Controls.SymbolRegular.CheckmarkCircle24 : Wpf.Ui.Controls.SymbolRegular.PauseCircle24;
+        StateIcon.Foreground = on
+            ? (System.Windows.Media.Brush)FindResource("AccentTextFillColorPrimaryBrush")
+            : (System.Windows.Media.Brush)FindResource("TextFillColorSecondaryBrush");
     }
 
     void UpdateLabels()
@@ -126,6 +141,16 @@ public partial class SettingsWindow
         ConvertKey.SelectionChanged += keyChanged;
         ToolsKey.SelectionChanged += keyChanged;
         ActionsKey.SelectionChanged += keyChanged;
+
+        ActiveSwitch.Click += (_, _) => Settings.SetPaused(ActiveSwitch.IsChecked != true);
+        // Keep in sync when pausing from the tray menu while this window is open.
+        Action onChanged = () => Dispatcher.BeginInvoke(() =>
+        {
+            if (ActiveSwitch.IsChecked == Settings.Current.Paused) ActiveSwitch.IsChecked = !Settings.Current.Paused;
+            UpdateState();
+        });
+        Settings.Changed += onChanged;
+        Closed += (_, _) => Settings.Changed -= onChanged;
 
         Shortcut.Click += (_, _) => { Settings.Current.KeyboardShortcutEnabled = Shortcut.IsChecked == true; Settings.Save(); };
         ContextMenuSwitch.Click += (_, _) =>

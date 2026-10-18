@@ -135,7 +135,7 @@ public partial class App : Application
 
     void OnModifierTapped(TriggerKey key)
     {
-        if (_tray?.Paused == true || _wheel == null) return;
+        if (Settings.Current.Paused || _wheel == null) return;
         var mode = Settings.Current.ModeFor(key);
         if (mode == null) return;
         bool dragging = _hooks!.IsDragging && Native.IsLeftButtonDown();
@@ -169,7 +169,8 @@ public partial class App : Application
     {
         if (_messageWindow == null) return;
         Native.UnregisterHotKey(_messageWindow.Handle, HotkeyId);
-        if (Settings.Current.KeyboardShortcutEnabled)
+        // While paused the shortcut is released so other apps can use Ctrl+Shift+Space.
+        if (Settings.Current.KeyboardShortcutEnabled && !Settings.Current.Paused)
         {
             const uint MOD_CONTROL = 0x2, MOD_SHIFT = 0x4, MOD_NOREPEAT = 0x4000, VK_SPACE = 0x20;
             Native.RegisterHotKey(_messageWindow.Handle, HotkeyId, MOD_CONTROL | MOD_SHIFT | MOD_NOREPEAT, VK_SPACE);
@@ -178,7 +179,7 @@ public partial class App : Application
 
     public void OpenForExplorerSelection()
     {
-        if (_wheel == null || _tray?.Paused == true) return;
+        if (_wheel == null || Settings.Current.Paused) return;
         var fg = Native.GetForegroundWindow();
         if (!ExplorerSelection.IsExplorerOrDesktop(fg))
         {
