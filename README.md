@@ -75,6 +75,17 @@ A **portable ZIP** is also available. Unzip it anywhere and run `Satsuma.exe`.
 
 **Uninstall:** go to *Settings → Apps → Satsuma → Uninstall*. This also removes the autostart and context-menu entries.
 
+## Footprint
+
+Measured on Windows 11 with a 24-thread CPU:
+
+| | CPU | RAM (working set) |
+|---|---|---|
+| Idle in tray, global hooks active | ~0.05 % | ~12 MB |
+| While the wheel is open | ~1 % | ~120 MB, released a few seconds after closing |
+
+The Fluent UI library only loads when you open Settings or the tray menu. After every wheel or conversion, Satsuma compacts its heap and hands memory back to Windows.
+
 ## Privacy
 
 - No uploads, no accounts, no telemetry.

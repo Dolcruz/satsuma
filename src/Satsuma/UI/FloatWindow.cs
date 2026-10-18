@@ -133,6 +133,7 @@ public sealed class FloatWindow : Window
         menu.Items.Add(new Separator());
         menu.Items.Add(MenuItem("Close", Close));
         root.ContextMenu = menu;
+        root.ContextMenuOpening += (_, _) => App.EnsureFluent();
     }
 
     static MenuItem MenuItem(string header, Action click)

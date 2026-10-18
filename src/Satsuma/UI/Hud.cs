@@ -23,6 +23,8 @@ public static class Hud
 
     public static HudJob Start(string title, string subtitle, string? thumbnailFor) => Window.AddJob(title, subtitle, thumbnailFor);
 
+    public static bool IsBusy => _window?.IsVisible == true;
+
     public static void Flash(string title, string subtitle, string? reveal = null)
     {
         var job = Window.AddJob(title, subtitle, null, glyph: "");
@@ -274,6 +276,7 @@ public sealed class HudWindow : Window
         {
             _hideTimer.Stop();
             Hide();
+            MemoryTrim.Schedule();
         }
     }
 

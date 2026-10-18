@@ -59,7 +59,7 @@ public sealed class WheelWindow : Window
         };
         _wheel.Hidden += () =>
         {
-            if (_closing) { Hide(); _closing = false; }
+            if (_closing) { Hide(); _closing = false; MemoryTrim.Schedule(); }
         };
 
         SourceInitialized += (_, _) =>

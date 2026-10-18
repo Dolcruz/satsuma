@@ -19,6 +19,19 @@ public partial class App : Application
 
     public static App Instance => (App)Current;
 
+    bool _fluentLoaded;
+
+    /// <summary>Loads the WPF-UI (Fluent) resources the first time a Fluent surface is shown.</summary>
+    public static void EnsureFluent()
+    {
+        var app = Instance;
+        if (app._fluentLoaded) return;
+        app._fluentLoaded = true;
+        app.Resources.MergedDictionaries.Add(new Wpf.Ui.Markup.ThemesDictionary { Theme = ApplicationTheme.Dark });
+        app.Resources.MergedDictionaries.Add(new Wpf.Ui.Markup.ControlsDictionary());
+        ApplicationThemeManager.ApplySystemTheme();
+    }
+
     /// <summary>Never-shown placeholder that holds Application.MainWindow while Settings is closed.</summary>
     public Window Anchor => _anchor ??= new Window { Title = "Satsuma", ShowInTaskbar = false, Width = 0, Height = 0 };
     Window? _anchor;
@@ -71,7 +84,6 @@ public partial class App : Application
         TaskScheduler.UnobservedTaskException += (_, ex) => { Log(ex.Exception); ex.SetObserved(); };
 
         Settings.Load();
-        ApplicationThemeManager.ApplySystemTheme();
         Integration.Apply(Settings.Current);
 
         _wheel = new WheelWindow();
@@ -93,6 +105,9 @@ public partial class App : Application
         _single.StartListening();
 
         HandleArgs(args);
+
+        MemoryTrim.IsBusy = () => _wheel.IsVisible || Hud.IsBusy;
+        MemoryTrim.Schedule();
 
         if (!Settings.Current.FirstRunDone)
         {

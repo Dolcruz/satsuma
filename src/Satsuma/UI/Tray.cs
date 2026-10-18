@@ -42,6 +42,7 @@ public sealed class Tray : IDisposable
 
     void ShowMenu()
     {
+        App.EnsureFluent();
         _menu ??= BuildMenu();
         ((MenuItem)_menu.Items[1]).Header = Paused ? "Resume gestures" : "Pause gestures";
         _menu.Placement = PlacementMode.MousePoint;

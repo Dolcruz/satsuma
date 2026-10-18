@@ -22,6 +22,8 @@
     <SelfContained>false</SelfContained>
     <SatelliteResourceLanguages>en;de</SatelliteResourceLanguages>
     <TieredPGO>true</TieredPGO>
+    <ConcurrentGarbageCollection>false</ConcurrentGarbageCollection>
+    <ServerGarbageCollection>false</ServerGarbageCollection>
     <InvariantGlobalization>false</InvariantGlobalization>
   </PropertyGroup>
 

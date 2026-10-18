@@ -19,9 +19,10 @@ public partial class SettingsWindow
     {
         if (_open == null)
         {
+            App.EnsureFluent();
             _open = new SettingsWindow();
             Application.Current.MainWindow = _open;
-            _open.Closed += (_, _) => { _open = null; Application.Current.MainWindow = App.Instance.Anchor; };
+            _open.Closed += (_, _) => { _open = null; Application.Current.MainWindow = App.Instance.Anchor; MemoryTrim.Schedule(); };
             _open.Show();
         }
         if (_open.WindowState == WindowState.Minimized) _open.WindowState = WindowState.Normal;
