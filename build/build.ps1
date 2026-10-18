@@ -24,4 +24,4 @@ if (-not $iscc) { throw "Inno Setup 6 not found (winget install JRSoftware.InnoS
 & $iscc "/DAppVersion=$Version" "/DSourceDir=$publish" (Join-Path $root 'installer\Satsuma.iss')
 if ($LASTEXITCODE) { throw "installer build failed" }
 
-Get-ChildItem $dist | Format-Table Name, @{n='MB'; e={[math]::Round($_.Length / 1MB, 1)}}
+Get-ChildItem $dist | ForEach-Object { '{0}  {1:N1} MB' -f $_.Name, ($_.Length / 1MB) }

@@ -191,7 +191,12 @@ public sealed class WheelWindow : Window
         var first = _paths.FirstOrDefault();
         _wheel.Caption = first == null ? "" : Path.GetFileName(first.TrimEnd('\\')) is { Length: > 0 } n ? n : first;
         _wheel.SubCaption = _paths.Count > 1 ? $"+{_paths.Count - 1} more" : null;
-        _wheel.Thumbnail = first == null ? null : ShellThumbnail.Get(first, 96);
+        var kinds = _paths.Select(FileKinds.Of).Distinct().ToList();
+        _wheel.HubGlyph = kinds.Count == 1 ? FileKinds.Glyph(kinds[0]) : "";
+        var exts = _paths.Select(p => Directory.Exists(p) ? "Folder" : FileKinds.Ext(p).ToUpperInvariant()).Distinct().ToList();
+        _wheel.HubLabel = _paths.Count == 0 ? "" : exts.Count == 1 && exts[0].Length > 0
+            ? (_paths.Count > 1 ? $"{_paths.Count} × {exts[0]}" : exts[0])
+            : $"{_paths.Count} items";
     }
 
     void UpdateEmptyText()

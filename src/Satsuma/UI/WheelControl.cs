@@ -34,7 +34,8 @@ public sealed class WheelControl : FrameworkElement
     public WheelMode Mode { get; private set; }
     public string Caption { get; set; } = "";
     public string? SubCaption { get; set; }
-    public ImageSource? Thumbnail { get; set; }
+    public string HubGlyph { get; set; } = "";
+    public string HubLabel { get; set; } = "";
     public string? EmptyText { get; set; }
     public bool KeyboardMode { get; set; }
 
@@ -263,18 +264,20 @@ public sealed class WheelControl : FrameworkElement
             var cancel = new FormattedText("Cancel", CultureInfo.CurrentUICulture, FlowDirection.LeftToRight, BodyFace, 12, B(muted), dpi);
             dc.DrawText(cancel, new Point(Cx - cancel.Width / 2, Cy + 10));
         }
-        else if (Thumbnail != null)
+        else
         {
-            double s = 46;
-            var rect = new Rect(Cx - s / 2, Cy - s / 2 - 9, s, s);
-            double ar = Thumbnail.Width / Math.Max(1, Thumbnail.Height);
-            if (ar > 1) rect = new Rect(rect.X, rect.Y + (s - s / ar) / 2, s, s / ar);
-            else if (ar < 1) rect = new Rect(rect.X + (s - s * ar) / 2, rect.Y, s * ar, s);
-            dc.PushClip(new RectangleGeometry(rect, 5, 5));
-            dc.DrawImage(Thumbnail, rect);
-            dc.Pop();
-            var modeText = new FormattedText(ModeName(Mode), CultureInfo.CurrentUICulture, FlowDirection.LeftToRight, LabelFace, 11.5, B(muted), dpi);
-            dc.DrawText(modeText, new Point(Cx - modeText.Width / 2, Cy + 20));
+            // Calm, consistent hub: file-type glyph in the accent color, the format, and the current wheel.
+            var glyph = new FormattedText(HubGlyph, CultureInfo.CurrentUICulture, FlowDirection.LeftToRight, IconFace, 26, B(accent), dpi);
+            var fmt = new FormattedText(HubLabel, CultureInfo.CurrentUICulture, FlowDirection.LeftToRight, LabelFace, 12.5, B(text), dpi)
+            {
+                MaxTextWidth = (InnerR - 14) * 2, MaxLineCount = 1, Trimming = TextTrimming.CharacterEllipsis, TextAlignment = TextAlignment.Center,
+            };
+            var modeText = new FormattedText(ModeName(Mode), CultureInfo.CurrentUICulture, FlowDirection.LeftToRight, BodyFace, 11, B(muted), dpi);
+            double total = glyph.Height + fmt.Height + modeText.Height;
+            double y0 = Cy - total / 2;
+            dc.DrawText(glyph, new Point(Cx - glyph.Width / 2, y0));
+            dc.DrawText(fmt, new Point(Cx - fmt.MaxTextWidth / 2, y0 + glyph.Height));
+            dc.DrawText(modeText, new Point(Cx - modeText.Width / 2, y0 + glyph.Height + fmt.Height));
         }
 
         if (n == 0 && EmptyText != null)
