@@ -1,0 +1,51 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Build
+        run: dotnet build src/Satsuma -c Release
+
+      - name: Self-test (every conversion, without video/audio)
+        shell: pwsh
+        run: |
+          $dir = Join-Path $env:RUNNER_TEMP 'selftest'
+          $exe = Get-ChildItem src/Satsuma/bin/Release -Recurse -Filter Satsuma.exe | Select-Object -First 1
+          $p = Start-Process $exe.FullName -ArgumentList '--selftest', $dir -PassThru -Wait
+          Get-Content (Join-Path $dir 'selftest.txt')
+          if ($p.ExitCode -ne 0) { throw "self-test failed ($($p.ExitCode))" }
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $version = if ('${{ github.ref_type }}' -eq 'tag') { '${{ github.ref_name }}'.TrimStart('v') } else { '0.0.0-ci' }
+          choco install innosetup --no-progress -y
+          ./build/build.ps1 -Version $version
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: satsuma
+          path: dist/*
+
+      - name: Release
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
