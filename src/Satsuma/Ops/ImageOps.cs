@@ -26,16 +26,18 @@ public static class ImageOps
 
     static MagickFormat FormatFor(string target) => target.ToUpperInvariant() switch
     {
-        "JPG" => MagickFormat.Jpeg,
+        "JPG" or "JPEG" or "JFIF" => MagickFormat.Jpeg,
         "PNG" => MagickFormat.Png,
         "WEBP" => MagickFormat.WebP,
         "AVIF" => MagickFormat.Avif,
         "HEIC" => MagickFormat.Heic,
-        "TIFF" => MagickFormat.Tiff,
+        "TIF" or "TIFF" => MagickFormat.Tiff,
         "BMP" => MagickFormat.Bmp,
         "GIF" => MagickFormat.Gif,
         "ICO" => MagickFormat.Ico,
         "PDF" => MagickFormat.Pdf,
+        "TGA" => MagickFormat.Tga,
+        "JXL" => MagickFormat.Jxl,
         _ => throw new NotSupportedException(target),
     };
 
@@ -52,7 +54,8 @@ public static class ImageOps
         {
             using var frames = new MagickImageCollection(path);
             frames.Coalesce();
-            frames.Write(output.TemporaryPath, format);
+            using (var stream = File.Create(output.TemporaryPath))
+                frames.Write(stream, format);
             output.Commit(ctx);
             return;
         }
@@ -76,7 +79,8 @@ public static class ImageOps
                 img.Settings.SetDefine(MagickFormat.Ico, "auto-resize", "256,128,64,48,32,24,16");
                 break;
         }
-        img.Write(output.TemporaryPath, format);
+        using (var stream = File.Create(output.TemporaryPath))
+            img.Write(stream, format);
         output.Commit(ctx);
     });
 
@@ -86,7 +90,8 @@ public static class ImageOps
         change(img);
         var ext = extFor?.Invoke(img) ?? (FileKinds.Ext(path) is "heic" or "heif" or "svg" or "psd" ? "png" : FileKinds.Ext(path));
         using var output = Output.For(path, ext, suffix);
-        img.Write(output.TemporaryPath);
+        using (var stream = File.Create(output.TemporaryPath))
+            img.Write(stream, FormatFor(ext));
         output.Commit(ctx);
     });
 
@@ -130,7 +135,8 @@ public static class ImageOps
             all.Add(img);
         }
         using var output = Output.For(ctx.Paths[0], "pdf", " (combined)");
-        all.Write(output.TemporaryPath, MagickFormat.Pdf);
+        using (var stream = File.Create(output.TemporaryPath))
+            all.Write(stream, MagickFormat.Pdf);
         output.Commit(ctx);
     });
 
@@ -158,7 +164,8 @@ public static class ImageOps
         all.Quantize(new QuantizeSettings { Colors = 256 });
         all.Optimize();
         using var output = Output.For(ctx.Paths[0], "gif", " (animation)");
-        all.Write(output.TemporaryPath, MagickFormat.Gif);
+        using (var stream = File.Create(output.TemporaryPath))
+            all.Write(stream, MagickFormat.Gif);
         output.Commit(ctx);
     });
 }

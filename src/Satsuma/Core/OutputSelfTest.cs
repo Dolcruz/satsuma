@@ -141,6 +141,62 @@ public static class OutputSelfTest
             catch (MagickException) { }
             Require(failed.Outputs.Count == 0 && Directory.GetFiles(root, "*.webp").Length == 2, "Failure changed completed images.");
         });
+        await Check("long-image-paths", async root =>
+        {
+            // Final paths fit the legacy native limit; owned staging adds enough depth to exceed it.
+            var nested = Path.Combine(root, new string('d', Math.Max(1, 225 - Path.GetFullPath(root).Length - 1)));
+            Directory.CreateDirectory(nested);
+            var png = Path.Combine(nested, "photo.png");
+            var blue = Path.Combine(nested, "blue.png");
+            using (var image = new MagickImage(MagickColors.Red, 32, 24)) image.Write(png);
+            using (var image = new MagickImage(MagickColors.Blue, 32, 24)) image.Write(blue);
+            using (var probe = Output.For(png, "webp"))
+                Require(probe.TemporaryPath.Length > 260, "The fixture did not exercise a long staging path.");
+
+            var converted = Context(png);
+            await ImageOps.Convert(png, "WEBP", converted);
+            using (var image = new MagickImage(converted.Outputs.Single()))
+                Require(image.Format == MagickFormat.WebP && image.Width == 32 && image.Height == 24, "Long-path conversion changed the image.");
+
+            var resized = Context(png);
+            await ImageOps.HalfSize(png, resized);
+            using (var image = new MagickImage(resized.Outputs.Single()))
+                Require(image.Format == MagickFormat.Png && image.Width == 16 && image.Height == 12, "Long-path transform lost its format or size.");
+
+            var pdf = new OpContext(new[] { png, blue }, null, null, default);
+            await ImageOps.CombineToPdf(pdf);
+            using (var document = PdfSharp.Pdf.IO.PdfReader.Open(pdf.Outputs.Single()))
+                Require(document.PageCount == 2, "Long-path image collection lost a PDF page.");
+
+            var gif = new OpContext(new[] { png, blue }, null, null, default);
+            await ImageOps.MakeGif(gif);
+            using (var frames = new MagickImageCollection(gif.Outputs.Single()))
+                Require(frames.Count == 2, "Long-path GIF lost a frame.");
+            var animated = Context(gif.Outputs.Single());
+            await ImageOps.Convert(animated.Paths[0], "WEBP", animated);
+            using (var frames = new MagickImageCollection(animated.Outputs.Single()))
+                Require(frames.Count == 2 && frames.All(f => f.Format == MagickFormat.WebP), "Long-path animated WebP lost its frames or format.");
+        });
+        await Check("image-transform-formats", async root =>
+        {
+            var formats = new[]
+            {
+                ("jpg", MagickFormat.Jpeg), ("jpeg", MagickFormat.Jpeg), ("jfif", MagickFormat.Jpeg),
+                ("png", MagickFormat.Png), ("webp", MagickFormat.WebP), ("avif", MagickFormat.Avif),
+                ("tif", MagickFormat.Tiff), ("tiff", MagickFormat.Tiff), ("bmp", MagickFormat.Bmp),
+                ("gif", MagickFormat.Gif), ("ico", MagickFormat.Ico), ("tga", MagickFormat.Tga), ("jxl", MagickFormat.Jxl),
+            };
+            foreach (var (extension, format) in formats)
+            {
+                var source = Path.Combine(root, "photo." + extension);
+                using (var image = new MagickImage(MagickColors.Red, 32, 24)) image.Write(source, format);
+                var ctx = Context(source);
+                await ImageOps.HalfSize(source, ctx);
+                using var result = new MagickImage(ctx.Outputs.Single());
+                Require(result.Format == format && result.Width == 16 && result.Height == 12,
+                    $"Transform changed the {extension} format or dimensions.");
+            }
+        });
         await Check("archive-folder-publication", async root =>
         {
             var source = Path.Combine(root, "bundle.zip");
