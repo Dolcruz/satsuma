@@ -53,6 +53,8 @@ Satsuma only shows the wheel when you *tap* a key (press and release quickly). H
 
 *Italic* tools appear when several files are selected. Mixed selections only show what works for every file.
 
+Spreadsheet conversions preserve cell text, including long IDs, leading zeros and decimal formatting. JSON values and XLSX cells are written as text. JSON uses the first row as column names: blank names become `column1`, `column2`, etc., and missing cells become empty strings. Duplicate names (including a collision with a generated name) or rows with more cells than column names produce an error instead of dropping data. CSV parsing supports comma or semicolon separators, quoted separators and multiline cells.
+
 **Actions** work on any file or folder:
 
 - **Share**: the Windows share sheet (Nearby Sharing, Mail, Teams …).

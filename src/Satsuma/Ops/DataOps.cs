@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Formats.Tar;
-using System.Globalization;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
@@ -55,9 +54,25 @@ public static class SheetOps
 
     static char DetectDelimiter(string text)
     {
-        var firstLine = text.Split('\n').FirstOrDefault() ?? "";
-        // German Excel exports use semicolons.
-        return firstLine.Count(c => c == ';') > firstLine.Count(c => c == ',') ? ';' : ',';
+        int commas = 0, semicolons = 0;
+        bool quoted = false;
+        for (int i = 0; i < text.Length; i++)
+        {
+            char c = text[i];
+            if (c == '"')
+            {
+                if (quoted && i + 1 < text.Length && text[i + 1] == '"') i++;
+                else quoted = !quoted;
+            }
+            else if (!quoted)
+            {
+                if (c is '\r' or '\n') break;
+                if (c == ',') commas++;
+                if (c == ';') semicolons++;
+            }
+        }
+        // German Excel exports use semicolons; quoted content is not a separator.
+        return semicolons > commas ? ';' : ',';
     }
 
     public static List<List<string>> ParseDelimited(string text, char delim)
@@ -65,10 +80,11 @@ public static class SheetOps
         var rows = new List<List<string>>();
         var row = new List<string>();
         var field = new StringBuilder();
-        bool quoted = false;
-        for (int i = 0; i < text.Length; i++)
+        bool quoted = false, rowStarted = false;
+        for (int i = text.StartsWith('\uFEFF') ? 1 : 0; i < text.Length; i++)
         {
             char c = text[i];
+            rowStarted = true;
             if (quoted)
             {
                 if (c == '"' && i + 1 < text.Length && text[i + 1] == '"') { field.Append('"'); i++; }
@@ -82,11 +98,12 @@ public static class SheetOps
                 if (c == '\r' && i + 1 < text.Length && text[i + 1] == '\n') i++;
                 row.Add(field.ToString()); field.Clear();
                 rows.Add(row); row = new List<string>();
+                rowStarted = false;
             }
             else field.Append(c);
         }
-        if (field.Length > 0 || row.Count > 0) { row.Add(field.ToString()); rows.Add(row); }
-        if (rows.Count > 0 && rows[0].Count > 0 && rows[0][0].StartsWith('﻿')) rows[0][0] = rows[0][0][1..];
+        if (quoted) throw new FormatException("The file ends inside a quoted field. Close the quote before converting it.");
+        if (rowStarted) { row.Add(field.ToString()); rows.Add(row); }
         return rows;
     }
 
@@ -106,21 +123,16 @@ public static class SheetOps
     {
         using var wb = new XLWorkbook();
         var ws = wb.Worksheets.Add("Sheet1");
-        for (int r = 0; r < rows.Count; r++)
-        for (int c = 0; c < rows[r].Count; c++)
-        {
-            var v = rows[r][c];
-            var cell = ws.Cell(r + 1, c + 1);
-            // Keep leading-zero values (postcodes, IDs) as text.
-            bool leadingZero = v.Length > 1 && v[0] == '0' && v[1] != '.';
-            if (r > 0 && !leadingZero && double.TryParse(v, NumberStyles.Float, CultureInfo.InvariantCulture, out var d))
-                cell.Value = d;
-            else cell.Value = v;
-        }
         if (rows.Count > 0)
         {
             ws.Row(1).Style.Font.Bold = true;
             ws.SheetView.FreezeRows(1);
+        }
+        for (int r = 0; r < rows.Count; r++)
+        for (int c = 0; c < rows[r].Count; c++)
+        {
+            // Literal text preserves IDs and precision, including a leading apostrophe.
+            ws.Cell(r + 1, c + 1).CreateRichText().AddText(rows[r][c]);
         }
         ws.Columns().AdjustToContents(1, Math.Min(rows.Count, 200), 6, 60);
         wb.SaveAs(path);
@@ -130,15 +142,17 @@ public static class SheetOps
     {
         if (rows.Count == 0) return "[]";
         var header = rows[0].Select((h, i) => string.IsNullOrWhiteSpace(h) ? $"column{i + 1}" : h).ToList();
-        var list = rows.Skip(1).Select(r =>
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var name in header)
+            if (!names.Add(name))
+                throw new FormatException($"The header '{name}' occurs more than once. JSON needs a unique name for every column.");
+        var list = rows.Skip(1).Select((r, index) =>
         {
-            var obj = new Dictionary<string, object?>();
+            if (r.Count > header.Count)
+                throw new FormatException($"Row {index + 2} has {r.Count} cells, but the header has {header.Count}. JSON needs a header for every column.");
+            var obj = new Dictionary<string, string>();
             for (int i = 0; i < header.Count; i++)
-            {
-                var v = i < r.Count ? r[i] : "";
-                bool leadingZero = v.Length > 1 && v[0] == '0' && v[1] != '.';
-                obj[header[i]] = !leadingZero && double.TryParse(v, NumberStyles.Float, CultureInfo.InvariantCulture, out var d) && v.Trim().Length > 0 ? d : v;
-            }
+                obj[header[i]] = i < r.Count ? r[i] : "";
             return obj;
         }).ToList();
         return JsonSerializer.Serialize(list, new JsonSerializerOptions { WriteIndented = true, Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping });
