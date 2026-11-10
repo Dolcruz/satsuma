@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Formats.Tar;
+using System.Globalization;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
@@ -9,7 +10,11 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
+using System.Xml;
 using ClosedXML.Excel;
+using DocumentFormat.OpenXml;
+using DocumentFormat.OpenXml.Packaging;
+using S = DocumentFormat.OpenXml.Spreadsheet;
 
 namespace Satsuma.Ops;
 
@@ -121,21 +126,83 @@ public static class SheetOps
 
     static void WriteXlsx(string path, List<List<string>> rows)
     {
-        using var wb = new XLWorkbook();
-        var ws = wb.Worksheets.Add("Sheet1");
+        if (rows.Count > 1048576 || rows.Any(row => row.Count > 16384))
+            throw new FormatException("XLSX supports at most 1048576 rows and 16384 columns.");
+        if (rows.Any(row => row.Any(value => value.Length > 32767)))
+            throw new FormatException("XLSX cells support at most 32767 UTF-16 characters.");
+
+        using var document = SpreadsheetDocument.Create(path, SpreadsheetDocumentType.Workbook);
+        var workbook = document.AddWorkbookPart();
+        workbook.Workbook = new S.Workbook();
+        var styles = workbook.AddNewPart<WorkbookStylesPart>();
+        styles.Stylesheet = new S.Stylesheet(
+            new S.Fonts(new S.Font(new S.FontSize { Val = 11 }, new S.FontName { Val = "Calibri" }),
+                        new S.Font(new S.Bold(), new S.FontSize { Val = 11 }, new S.FontName { Val = "Calibri" })),
+            new S.Fills(new S.Fill(new S.PatternFill { PatternType = S.PatternValues.None }),
+                        new S.Fill(new S.PatternFill { PatternType = S.PatternValues.Gray125 })),
+            new S.Borders(new S.Border()),
+            new S.CellStyleFormats(new S.CellFormat()),
+            new S.CellFormats(new S.CellFormat { FontId = 0, FillId = 0, BorderId = 0, NumberFormatId = 49 },
+                              new S.CellFormat { FontId = 1, FillId = 0, BorderId = 0, NumberFormatId = 49, ApplyFont = true }),
+            new S.CellStyles(new S.CellStyle { Name = "Normal", FormatId = 0, BuiltinId = 0 }));
+        var strings = workbook.AddNewPart<SharedStringTablePart>();
+        strings.SharedStringTable = new S.SharedStringTable();
+        var stringIndexes = new Dictionary<string, int>(StringComparer.Ordinal);
+        var sheet = workbook.AddNewPart<WorksheetPart>();
+        sheet.Worksheet = new S.Worksheet();
         if (rows.Count > 0)
+            sheet.Worksheet.Append(new S.SheetViews(new S.SheetView(new S.Pane {
+                VerticalSplit = 1, TopLeftCell = "A2", ActivePane = S.PaneValues.BottomLeft, State = S.PaneStateValues.Frozen
+            }) { WorkbookViewId = 0 }));
+        int columns = rows.Count == 0 ? 0 : rows.Max(row => row.Count);
+        if (columns > 0)
         {
-            ws.Row(1).Style.Font.Bold = true;
-            ws.SheetView.FreezeRows(1);
+            var widths = new S.Columns();
+            for (int c = 0; c < columns; c++)
+            {
+                int length = rows.Take(200).Where(row => c < row.Count)
+                    .SelectMany(row => row[c].Split('\r', '\n')).Select(value => value.Length).DefaultIfEmpty(0).Max();
+                widths.Append(new S.Column { Min = (uint)c + 1, Max = (uint)c + 1, Width = Math.Clamp(length + 2, 6, 60), CustomWidth = true });
+            }
+            sheet.Worksheet.Append(widths);
         }
+        var data = sheet.Worksheet.AppendChild(new S.SheetData());
         for (int r = 0; r < rows.Count; r++)
-        for (int c = 0; c < rows[r].Count; c++)
         {
-            // Literal text preserves IDs and precision, including a leading apostrophe.
-            ws.Cell(r + 1, c + 1).CreateRichText().AddText(rows[r][c]);
+            var row = data.AppendChild(new S.Row { RowIndex = (uint)r + 1 });
+            for (int c = 0; c < rows[r].Count; c++)
+            {
+                string value = rows[r][c];
+                if (!stringIndexes.TryGetValue(value, out int index))
+                {
+                    index = stringIndexes.Count;
+                    stringIndexes.Add(value, index);
+                    strings.SharedStringTable.Append(new S.SharedStringItem(new S.Text(EncodeXlsxText(value)) { Space = SpaceProcessingModeValues.Preserve }));
+                }
+                row.Append(new S.Cell {
+                    CellReference = XLHelper.GetColumnLetterFromNumber(c + 1) + (r + 1).ToString(CultureInfo.InvariantCulture),
+                    DataType = S.CellValues.SharedString, StyleIndex = r == 0 ? 1U : 0U,
+                    CellValue = new S.CellValue(index.ToString(CultureInfo.InvariantCulture))
+                });
+            }
         }
-        ws.Columns().AdjustToContents(1, Math.Min(rows.Count, 200), 6, 60);
-        wb.SaveAs(path);
+        workbook.Workbook.AppendChild(new S.Sheets()).Append(new S.Sheet { Id = workbook.GetIdOfPart(sheet), SheetId = 1, Name = "Sheet1" });
+    }
+
+    // SpreadsheetML ST_Xstring also escapes CR and literal _xHHHH_ sequences, beyond XML escaping.
+    static string EncodeXlsxText(string value)
+    {
+        value = Regex.Replace(value, "_(?=x[0-9A-Fa-f]{4}_)", "_x005F_");
+        var result = new StringBuilder(value.Length);
+        for (int i = 0; i < value.Length; i++)
+        {
+            char c = value[i];
+            if (c != '\r' && XmlConvert.IsXmlChar(c)) result.Append(c);
+            else if (char.IsHighSurrogate(c) && i + 1 < value.Length && char.IsLowSurrogate(value[i + 1]))
+                result.Append(c).Append(value[++i]);
+            else result.Append("_x").Append(((int)c).ToString("X4", CultureInfo.InvariantCulture)).Append('_');
+        }
+        return result.ToString();
     }
 
     static string ToJson(List<List<string>> rows)

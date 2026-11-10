@@ -5,6 +5,8 @@ using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
 using ClosedXML.Excel;
+using DocumentFormat.OpenXml.Packaging;
+using DocumentFormat.OpenXml.Validation;
 using Satsuma.Ops;
 
 namespace Satsuma.Core;
@@ -94,8 +96,13 @@ public static class SheetSelfTest
                 "Quoted commas or newline changed delimiter detection.");
         });
 
-        string[] values = { "9007199254740993", "1.2300", "00123", "1e309", "NaN", "Infinity", "-0", "=SUM(A1:A2)", " 42 ", "0.123456789012345678901234567890", "'quoted", "TRUE", "2026-11-10" };
-        string content = "value\r\n" + string.Join("\r\n", values) + "\r\n";
+        string[] values = {
+            "9007199254740993", "1.2300", "00123", "1e309", "NaN", "Infinity", "-0", "=SUM(A1:A2)", " 42 ",
+            "0.123456789012345678901234567890", "'quoted", "''quoted", "'", "TRUE", "2026-11-10", "😀 & <> \"quoted\"",
+            "before\u0001after", "\u0000\u0008\u000B\u000C\u001F\uFFFE\uFFFF", "line1\r\nline2", "before\rafter", "\t\n\r\n\r",
+            "_x0001_", "_x005F_x0001_", "_X0001_", "_x000d_", "'\u0001\r_x0001_", "00123"
+        };
+        string content = "value\r\n" + string.Join("\r\n", values.Select(v => "\"" + v.Replace("\"", "\"\"") + "\"")) + "\r\n";
         await Check("JSON preserves exact text", async () =>
         {
             var ctx = await Convert("values-json", content, "JSON");
@@ -107,17 +114,44 @@ public static class SheetSelfTest
         await Check("XLSX preserves exact text", async () =>
         {
             var ctx = await Convert("values-xlsx", content, "XLSX");
+            using (var package = SpreadsheetDocument.Open(ctx.Outputs[0], false))
+                Require(!new OpenXmlValidator().Validate(package).Any(), "XLSX is not a valid SpreadsheetML package.");
             using var workbook = new XLWorkbook(ctx.Outputs[0]);
             var sheet = workbook.Worksheet(1);
             for (int i = 0; i < values.Length; i++)
-                Require(sheet.Cell(i + 2, 1).DataType == XLDataType.Text && sheet.Cell(i + 2, 1).GetString() == values[i],
+                Require(sheet.Cell(i + 2, 1).DataType == XLDataType.Text && !sheet.Cell(i + 2, 1).HasFormula && sheet.Cell(i + 2, 1).GetString() == values[i],
                     $"XLSX changed row {i + 2}.");
+            Require(sheet.Cell(1, 1).Style.Font.Bold && sheet.SheetView.SplitRow == 1 &&
+                sheet.Column(1).Width >= 6 && sheet.Column(1).Width <= 60, "Header formatting, frozen row or readable width was lost.");
             var roundtrip = new OpContext(ctx.Outputs, null, null, default);
             await SheetOps.Convert(ctx.Outputs[0], "JSON", roundtrip);
             using var json = JsonDocument.Parse(File.ReadAllText(roundtrip.Outputs.Single()));
             Require(json.RootElement.EnumerateArray().Select(r => r.GetProperty("value").GetString()).SequenceEqual(values),
                 "XLSX to JSON changed a cell's text.");
         });
+        await Check("XLSX maximum cell length", async () =>
+        {
+            string value = new string('a', 32765) + "😀";
+            var ctx = await Convert("maximum-cell", "value\r\n" + value, "XLSX");
+            using var workbook = new XLWorkbook(ctx.Outputs[0]);
+            Require(workbook.Worksheet(1).Cell(2, 1).GetString() == value, "A valid maximum-length cell was changed.");
+        });
+        async Task RejectXlsx(string name, string text)
+        {
+            var source = Path.Combine(dir, name + ".csv");
+            File.WriteAllText(source, text);
+            var ctx = new OpContext(new[] { source }, null, null, default);
+            try { await SheetOps.Convert(source, "XLSX", ctx); }
+            catch (FormatException)
+            {
+                Require(ctx.Outputs.Count == 0 && !File.Exists(Path.ChangeExtension(source, "xlsx")),
+                    "Rejected input must not create an XLSX output.");
+                return;
+            }
+            throw new Exception("Expected an explicit XLSX format-limit error.");
+        }
+        await Check("XLSX oversized cell", () => RejectXlsx("oversized-cell", "value\r\n" + new string('a', 32768)));
+        await Check("XLSX too many columns", () => RejectXlsx("too-many-columns", string.Join(',', Enumerable.Repeat("value", 16385))));
         await Check("duplicate JSON headers", () => RejectJson("duplicate", "name,name\r\nfirst,second\r\n"));
         await Check("generated JSON header collision", () => RejectJson("collision", "column2,\r\nfirst,second\r\n"));
         await Check("wide JSON row", () => RejectJson("wide", "name,value\r\nfirst,second,third\r\n"));
