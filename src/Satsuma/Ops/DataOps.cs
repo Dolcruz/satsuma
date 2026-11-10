@@ -133,7 +133,7 @@ public static class SheetOps
 
         using var document = SpreadsheetDocument.Create(path, SpreadsheetDocumentType.Workbook);
         var workbook = document.AddWorkbookPart();
-        workbook.Workbook = new S.Workbook();
+        workbook.Workbook = new S.Workbook(new S.BookViews(new S.WorkbookView()));
         var styles = workbook.AddNewPart<WorkbookStylesPart>();
         styles.Stylesheet = new S.Stylesheet(
             new S.Fonts(new S.Font(new S.FontSize { Val = 11 }, new S.FontName { Val = "Calibri" }),

@@ -8,6 +8,7 @@ using ClosedXML.Excel;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Validation;
 using Satsuma.Ops;
+using S = DocumentFormat.OpenXml.Spreadsheet;
 
 namespace Satsuma.Core;
 
@@ -115,7 +116,14 @@ public static class SheetSelfTest
         {
             var ctx = await Convert("values-xlsx", content, "XLSX");
             using (var package = SpreadsheetDocument.Open(ctx.Outputs[0], false))
+            {
                 Require(!new OpenXmlValidator().Validate(package).Any(), "XLSX is not a valid SpreadsheetML package.");
+                var workbookPart = package.WorkbookPart!;
+                int viewCount = workbookPart.Workbook.BookViews?.Elements<S.WorkbookView>().Count() ?? 0;
+                Require(workbookPart.WorksheetParts.SelectMany(part => part.Worksheet.Descendants<S.SheetView>())
+                    .All(view => view.WorkbookViewId?.Value is uint id && id < (uint)viewCount),
+                    "A sheet view refers to a missing workbook view.");
+            }
             using var workbook = new XLWorkbook(ctx.Outputs[0]);
             var sheet = workbook.Worksheet(1);
             for (int i = 0; i < values.Length; i++)
