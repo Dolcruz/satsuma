@@ -22,6 +22,7 @@ public static class SelfTest
         Directory.CreateDirectory(dir);
         var report = new StringBuilder();
         int failures = await SheetSelfTest.Run(Path.Combine(dir, "sheet-content"), report);
+        failures += await OutputSelfTest.Run(Path.Combine(dir, "output-ownership"), report);
 
         var samples = await MakeSamples(dir, report);
 

@@ -21,16 +21,16 @@ public static class SheetOps
     public static Task Convert(string path, string target, OpContext ctx) => Task.Run(() =>
     {
         var rows = Read(path);
-        var output = Output.For(path, target.ToLowerInvariant());
+        using var output = Output.For(path, target.ToLowerInvariant());
         switch (target.ToUpperInvariant())
         {
-            case "XLSX": WriteXlsx(output, rows); break;
-            case "CSV": File.WriteAllText(output, ToDelimited(rows, ','), new UTF8Encoding(true)); break;
-            case "TSV": File.WriteAllText(output, ToDelimited(rows, '\t'), new UTF8Encoding(true)); break;
-            case "JSON": File.WriteAllText(output, ToJson(rows), Encoding.UTF8); break;
-            case "HTML": File.WriteAllText(output, ToHtml(Path.GetFileNameWithoutExtension(path), rows), Encoding.UTF8); break;
+            case "XLSX": WriteXlsx(output.TemporaryPath, rows); break;
+            case "CSV": File.WriteAllText(output.TemporaryPath, ToDelimited(rows, ','), new UTF8Encoding(true)); break;
+            case "TSV": File.WriteAllText(output.TemporaryPath, ToDelimited(rows, '\t'), new UTF8Encoding(true)); break;
+            case "JSON": File.WriteAllText(output.TemporaryPath, ToJson(rows), Encoding.UTF8); break;
+            case "HTML": File.WriteAllText(output.TemporaryPath, ToHtml(Path.GetFileNameWithoutExtension(path), rows), Encoding.UTF8); break;
         }
-        ctx.Outputs.Add(output);
+        output.Commit(ctx);
     });
 
     static List<List<string>> Read(string path)
@@ -179,7 +179,7 @@ public static class SubtitleOps
     public static Task Convert(string path, string target, OpContext ctx) => Task.Run(() =>
     {
         var text = File.ReadAllText(path).Replace("\r\n", "\n");
-        var output = Output.For(path, target.ToLowerInvariant());
+        using var output = Output.For(path, target.ToLowerInvariant());
         string result = target.ToUpperInvariant() switch
         {
             "VTT" => "WEBVTT\n\n" + Regex.Replace(text.TrimStart('﻿'), @"(\d{2}:\d{2}:\d{2}),(\d{3})", "$1.$2"),
@@ -187,8 +187,8 @@ public static class SubtitleOps
             "TXT" => ToText(text),
             _ => throw new NotSupportedException(target),
         };
-        File.WriteAllText(output, result.Replace("\n", "\r\n"), Encoding.UTF8);
-        ctx.Outputs.Add(output);
+        File.WriteAllText(output.TemporaryPath, result.Replace("\n", "\r\n"), Encoding.UTF8);
+        output.Commit(ctx);
     });
 
     static readonly Regex Cue = new(@"(?:(\d{2}):)?(\d{2}):(\d{2})[\.,](\d{3})\s*-->\s*(?:(\d{2}):)?(\d{2}):(\d{2})[\.,](\d{3})[^\n]*", RegexOptions.Compiled);
@@ -249,9 +249,9 @@ public static class ArchiveOps
 
     public static Task Extract(string path, OpContext ctx) => Task.Run(() =>
     {
-        var dir = Output.Unique(Path.Combine(Path.GetDirectoryName(path)!, BaseName(path)));
-        ExtractTo(path, dir);
-        ctx.Outputs.Add(dir);
+        using var output = Output.FolderAt(Path.Combine(Path.GetDirectoryName(path)!, BaseName(path)));
+        ExtractTo(path, output.TemporaryPath);
+        output.Commit(ctx);
     });
 
     static void ExtractTo(string path, string dir)
@@ -291,9 +291,9 @@ public static class ArchiveOps
         {
             ExtractTo(path, temp);
             var ext = target.ToUpperInvariant() switch { "ZIP" => "zip", "TAR" => "tar", _ => "tar.gz" };
-            var output = Output.Unique(Path.Combine(Path.GetDirectoryName(path)!, BaseName(path) + "." + ext));
-            Pack(temp, output, includeBaseDir: false);
-            ctx.Outputs.Add(output);
+            using var output = Output.FileAt(Path.Combine(Path.GetDirectoryName(path)!, BaseName(path) + "." + ext));
+            Pack(temp, output.TemporaryPath, includeBaseDir: false);
+            output.Commit(ctx);
         }
         finally { try { Directory.Delete(temp, true); } catch { } }
     });
@@ -304,14 +304,14 @@ public static class ArchiveOps
         var first = ctx.Paths[0].TrimEnd('\\');
         var parent = Path.GetDirectoryName(first)!;
         string name = ctx.Paths.Count == 1 ? Path.GetFileNameWithoutExtension(first) : (Path.GetFileName(parent) is { Length: > 0 } parentName ? parentName : "Archive");
-        var output = Output.Unique(Path.Combine(parent, name + ".zip"));
+        using var output = Output.FileAt(Path.Combine(parent, name + ".zip"));
         if (ctx.Paths.Count == 1 && Directory.Exists(first))
         {
-            ZipFile.CreateFromDirectory(first, output, CompressionLevel.Optimal, includeBaseDirectory: true);
+            ZipFile.CreateFromDirectory(first, output.TemporaryPath, CompressionLevel.Optimal, includeBaseDirectory: true);
         }
         else
         {
-            using var zip = ZipFile.Open(output, ZipArchiveMode.Create);
+            using var zip = ZipFile.Open(output.TemporaryPath, ZipArchiveMode.Create);
             int i = 0;
             foreach (var p in ctx.Paths)
             {
@@ -325,7 +325,7 @@ public static class ArchiveOps
                 ctx.Progress(++i / (double)ctx.Paths.Count);
             }
         }
-        ctx.Outputs.Add(output);
+        output.Commit(ctx);
     });
 
     static void Pack(string dir, string output, bool includeBaseDir)

@@ -72,38 +72,75 @@ public sealed class OpContext
     }
 }
 
-public static class Output
+/// <summary>An operation owns its temporary output until a non-overwriting move publishes it.</summary>
+public sealed class Output : IDisposable
 {
+    readonly string _destination;
+    readonly string _stagingDirectory;
+    readonly bool _isDirectory;
+
+    Output(string destination, bool isDirectory)
+    {
+        _destination = Path.GetFullPath(destination);
+        _isDirectory = isDirectory;
+        _stagingDirectory = Path.Combine(Path.GetDirectoryName(_destination)!, ".satsuma-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(_stagingDirectory);
+        TemporaryPath = Path.Combine(_stagingDirectory, Path.GetFileName(_destination));
+        try { if (isDirectory) Directory.CreateDirectory(TemporaryPath); }
+        catch { Dispose(); throw; }
+    }
+
+    public string TemporaryPath { get; }
+
     /// <summary>"photo.heic" → "photo.png" next to the source, never overwriting anything.</summary>
-    public static string For(string source, string newExtension, string suffix = "")
+    public static Output For(string source, string newExtension, string suffix = "")
     {
         var dir = WritableDir(Path.GetDirectoryName(source)!);
         var name = Path.GetFileNameWithoutExtension(source.TrimEnd('\\', '/')) + suffix;
-        return Unique(Path.Combine(dir, name + "." + newExtension.TrimStart('.')));
+        return FileAt(Path.Combine(dir, name + "." + newExtension.TrimStart('.')));
     }
 
-    public static string FolderFor(string source, string suffix)
+    public static Output FolderFor(string source, string suffix)
     {
         var dir = WritableDir(Path.GetDirectoryName(source)!);
         var name = Path.GetFileNameWithoutExtension(source) + suffix;
-        var path = Path.Combine(dir, name);
-        int i = 2;
-        while (Directory.Exists(path) || File.Exists(path)) path = Path.Combine(dir, $"{name} ({i++})");
-        Directory.CreateDirectory(path);
-        return path;
+        return FolderAt(Path.Combine(dir, name));
     }
 
-    public static string Unique(string path)
+    public static Output FileAt(string path) => new(path, isDirectory: false);
+    public static Output FolderAt(string path) => new(path, isDirectory: true);
+
+    /// <summary>Only completed outputs become visible under their final name.</summary>
+    public string Commit(OpContext ctx)
     {
-        if (!File.Exists(path) && !Directory.Exists(path)) return path;
-        var dir = Path.GetDirectoryName(path)!;
-        var name = Path.GetFileNameWithoutExtension(path);
-        var ext = Path.GetExtension(path);
+        var dir = Path.GetDirectoryName(_destination)!;
+        var name = _isDirectory ? Path.GetFileName(_destination) : Path.GetFileNameWithoutExtension(_destination);
+        var ext = _isDirectory ? "" : Path.GetExtension(_destination);
+        var candidate = _destination;
         for (int i = 2; ; i++)
         {
-            var candidate = Path.Combine(dir, $"{name} ({i}){ext}");
-            if (!File.Exists(candidate) && !Directory.Exists(candidate)) return candidate;
+            ctx.Token.ThrowIfCancellationRequested();
+            try
+            {
+                if (_isDirectory) Directory.Move(TemporaryPath, candidate);
+                else File.Move(TemporaryPath, candidate, overwrite: false);
+                ctx.Outputs.Add(candidate);
+                return candidate;
+            }
+            catch (IOException) when (File.Exists(candidate) || Directory.Exists(candidate))
+            {
+                candidate = Path.Combine(dir, $"{name} ({i}){ext}");
+            }
         }
+    }
+
+    public void Dispose()
+    {
+        // The staging directory is the only path this operation owns, even after a failed move.
+        try { Directory.Delete(_stagingDirectory, recursive: true); }
+        catch (DirectoryNotFoundException) { }
+        catch (IOException ex) { App.Log(ex); }
+        catch (UnauthorizedAccessException ex) { App.Log(ex); }
     }
 
     static string WritableDir(string dir)

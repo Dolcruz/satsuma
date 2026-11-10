@@ -45,25 +45,25 @@ public static class DocOps
             _ => throw new NotSupportedException(),
         };
 
-        var output = Output.For(path, target.ToLowerInvariant());
+        using var output = Output.For(path, target.ToLowerInvariant());
         switch (target.ToUpperInvariant())
         {
             case "MD":
-                File.WriteAllText(output, kind == FileKind.Text ? File.ReadAllText(path) : markdown, Encoding.UTF8);
+                File.WriteAllText(output.TemporaryPath, kind == FileKind.Text ? File.ReadAllText(path) : markdown, Encoding.UTF8);
                 break;
             case "TXT":
                 var plain = kind == FileKind.Rtf ? RtfToText(path) : Markdown.ToPlainText(markdown, Pipeline);
-                File.WriteAllText(output, plain.Trim() + Environment.NewLine, Encoding.UTF8);
+                File.WriteAllText(output.TemporaryPath, plain.Trim() + Environment.NewLine, Encoding.UTF8);
                 break;
             case "HTML":
-                File.WriteAllText(output, HtmlPage(title, Markdown.ToHtml(markdown, Pipeline)), Encoding.UTF8);
+                File.WriteAllText(output.TemporaryPath, HtmlPage(title, Markdown.ToHtml(markdown, Pipeline)), Encoding.UTF8);
                 break;
             case "DOCX":
-                WriteDocx(output, BlocksFromMarkdown(markdown));
+                WriteDocx(output.TemporaryPath, BlocksFromMarkdown(markdown));
                 break;
             default: throw new NotSupportedException(target);
         }
-        ctx.Outputs.Add(output);
+        output.Commit(ctx);
     });
 
     // ---------------- Reading ----------------

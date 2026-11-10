@@ -45,15 +45,15 @@ public static class ImageOps
     {
         var format = FormatFor(target);
         var ext = target.ToLowerInvariant();
-        var output = Output.For(path, ext);
+        using var output = Output.For(path, ext);
 
         // Animated GIF → WebP keeps its animation; everything else takes the first frame.
         if (FileKinds.Ext(path) == "gif" && format is MagickFormat.WebP)
         {
             using var frames = new MagickImageCollection(path);
             frames.Coalesce();
-            frames.Write(output, format);
-            ctx.Outputs.Add(output);
+            frames.Write(output.TemporaryPath, format);
+            output.Commit(ctx);
             return;
         }
 
@@ -76,8 +76,8 @@ public static class ImageOps
                 img.Settings.SetDefine(MagickFormat.Ico, "auto-resize", "256,128,64,48,32,24,16");
                 break;
         }
-        img.Write(output, format);
-        ctx.Outputs.Add(output);
+        img.Write(output.TemporaryPath, format);
+        output.Commit(ctx);
     });
 
     static Task Transform(string path, string suffix, OpContext ctx, Action<MagickImage> change, Func<MagickImage, string>? extFor = null) => Task.Run(() =>
@@ -85,9 +85,9 @@ public static class ImageOps
         using var img = Load(path);
         change(img);
         var ext = extFor?.Invoke(img) ?? (FileKinds.Ext(path) is "heic" or "heif" or "svg" or "psd" ? "png" : FileKinds.Ext(path));
-        var output = Output.For(path, ext, suffix);
-        img.Write(output);
-        ctx.Outputs.Add(output);
+        using var output = Output.For(path, ext, suffix);
+        img.Write(output.TemporaryPath);
+        output.Commit(ctx);
     });
 
     public static Task Compress(string path, OpContext ctx) => Transform(path, " (compressed)", ctx, img =>
@@ -129,9 +129,9 @@ public static class ImageOps
             if (img.HasAlpha) { img.BackgroundColor = MagickColors.White; img.Alpha(AlphaOption.Remove); }
             all.Add(img);
         }
-        var output = Output.For(ctx.Paths[0], "pdf", " (combined)");
-        all.Write(output, MagickFormat.Pdf);
-        ctx.Outputs.Add(output);
+        using var output = Output.For(ctx.Paths[0], "pdf", " (combined)");
+        all.Write(output.TemporaryPath, MagickFormat.Pdf);
+        output.Commit(ctx);
     });
 
     public static Task MakeGif(OpContext ctx) => Task.Run(() =>
@@ -157,8 +157,8 @@ public static class ImageOps
         }
         all.Quantize(new QuantizeSettings { Colors = 256 });
         all.Optimize();
-        var output = Output.For(ctx.Paths[0], "gif", " (animation)");
-        all.Write(output, MagickFormat.Gif);
-        ctx.Outputs.Add(output);
+        using var output = Output.For(ctx.Paths[0], "gif", " (animation)");
+        all.Write(output.TemporaryPath, MagickFormat.Gif);
+        output.Commit(ctx);
     });
 }

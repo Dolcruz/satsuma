@@ -1,5 +1,4 @@
 using System;
-using System.IO;
 using System.Threading.Tasks;
 using static Satsuma.Ops.FFmpeg;
 
@@ -32,22 +31,20 @@ public static class MediaOps
         _ => throw new NotSupportedException(target),
     };
 
-    static async Task Ffmpeg(string input, string output, string args, IProgress<double> p, OpContext ctx, string preInput = "")
+    static async Task Ffmpeg(string input, Output output, string args, IProgress<double> p, OpContext ctx, string preInput = "")
     {
-        try
+        using (output)
         {
-            await Run($"{preInput} -i {Q(input)} {args} {Q(output)}", p, ctx.Token);
-            ctx.Outputs.Add(output);
-        }
-        catch
-        {
-            try { if (File.Exists(output)) File.Delete(output); } catch { }
-            throw;
+            await Run($"{preInput} -i {Q(input)} {args} {Q(output.TemporaryPath)}", p, ctx.Token);
+            output.Commit(ctx);
         }
     }
 
-    public static Task Convert(string path, string target, IProgress<double> p, OpContext ctx) =>
-        Ffmpeg(path, Output.For(path, target.ToLowerInvariant()), ArgsFor(target, ctx), p, ctx);
+    public static Task Convert(string path, string target, IProgress<double> p, OpContext ctx)
+    {
+        var args = ArgsFor(target, ctx);
+        return Ffmpeg(path, Output.For(path, target.ToLowerInvariant()), args, p, ctx);
+    }
 
     // ---- Video tools ----
 
