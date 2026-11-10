@@ -152,8 +152,18 @@ public static class FFmpeg
         proc.BeginOutputReadLine();
         proc.BeginErrorReadLine();
         using (ct.Register(() => { try { proc.Kill(true); } catch { } }))
-            await proc.WaitForExitAsync(ct);
+        {
+            try { await proc.WaitForExitAsync(ct); }
+            catch (OperationCanceledException)
+            {
+                // Cancellation kills the child, but its output is still owned until it releases its handles.
+                try { await proc.WaitForExitAsync(); }
+                catch (Exception ex) { App.Log(ex); }
+                throw;
+            }
+        }
 
+        ct.ThrowIfCancellationRequested();
         if (proc.ExitCode != 0)
         {
             string tail;

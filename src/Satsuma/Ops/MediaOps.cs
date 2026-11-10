@@ -1,5 +1,4 @@
 using System;
-using System.IO;
 using System.Threading.Tasks;
 using static Satsuma.Ops.FFmpeg;
 
@@ -32,22 +31,20 @@ public static class MediaOps
         _ => throw new NotSupportedException(target),
     };
 
-    static async Task Ffmpeg(string input, string output, string args, IProgress<double> p, OpContext ctx, string preInput = "")
+    static async Task Ffmpeg(string input, Output output, string args, IProgress<double> p, OpContext ctx, string preInput = "")
     {
-        try
+        using (output)
         {
-            await Run($"{preInput} -i {Q(input)} {args} {Q(output)}", p, ctx.Token);
-            ctx.Outputs.Add(output);
-        }
-        catch
-        {
-            try { if (File.Exists(output)) File.Delete(output); } catch { }
-            throw;
+            await Run($"{preInput} -i {Q(input)} {args} {Q(output.TemporaryPath)}", p, ctx.Token);
+            output.Commit(ctx);
         }
     }
 
-    public static Task Convert(string path, string target, IProgress<double> p, OpContext ctx) =>
-        Ffmpeg(path, Output.For(path, target.ToLowerInvariant()), ArgsFor(target, ctx), p, ctx);
+    public static Task Convert(string path, string target, IProgress<double> p, OpContext ctx)
+    {
+        var args = ArgsFor(target, ctx);
+        return Ffmpeg(path, Output.For(path, target.ToLowerInvariant()), args, p, ctx);
+    }
 
     // ---- Video tools ----
 
@@ -68,7 +65,7 @@ public static class MediaOps
 
     public static Task DoubleSpeed(string path, IProgress<double> p, OpContext ctx) =>
         Ffmpeg(path, Output.For(path, "mp4", " (2x)"),
-            "-filter_complex \"[0:v]setpts=0.5*PTS[v];[0:a]atempo=2.0[a]\" -map \"[v]\" -map \"[a]?\" -c:v libx264 -crf 23 -preset medium -pix_fmt yuv420p -c:a aac -b:a 160k", p, ctx);
+            "-map 0:v:0 -map 0:a:0? -vf setpts=0.5*PTS -af atempo=2.0 -c:v libx264 -crf 23 -preset medium -pix_fmt yuv420p -c:a aac -b:a 160k", p, ctx);
 
     public static Task Snapshot(string path, IProgress<double> p, OpContext ctx) =>
         Ffmpeg(path, Output.For(path, "png", " (frame)"), "-frames:v 1 -update 1", p, ctx, preInput: "-ss 1");

@@ -21,7 +21,8 @@ public static class SelfTest
     {
         Directory.CreateDirectory(dir);
         var report = new StringBuilder();
-        int failures = 0;
+        int failures = await SheetSelfTest.Run(Path.Combine(dir, "sheet-content"), report);
+        failures += await OutputSelfTest.Run(Path.Combine(dir, "output-ownership"), report);
 
         var samples = await MakeSamples(dir, report);
 
@@ -54,6 +55,7 @@ public static class SelfTest
                 }
             }
         }
+        failures += await MediaSelfTest.Run(Path.Combine(dir, "media-speed"), report);
         report.AppendLine().AppendLine($"{failures} failure(s)");
         File.WriteAllText(Path.Combine(dir, "selftest.txt"), report.ToString());
         return failures;

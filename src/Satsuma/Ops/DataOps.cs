@@ -10,7 +10,11 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
+using System.Xml;
 using ClosedXML.Excel;
+using DocumentFormat.OpenXml;
+using DocumentFormat.OpenXml.Packaging;
+using S = DocumentFormat.OpenXml.Spreadsheet;
 
 namespace Satsuma.Ops;
 
@@ -22,16 +26,16 @@ public static class SheetOps
     public static Task Convert(string path, string target, OpContext ctx) => Task.Run(() =>
     {
         var rows = Read(path);
-        var output = Output.For(path, target.ToLowerInvariant());
+        using var output = Output.For(path, target.ToLowerInvariant());
         switch (target.ToUpperInvariant())
         {
-            case "XLSX": WriteXlsx(output, rows); break;
-            case "CSV": File.WriteAllText(output, ToDelimited(rows, ','), new UTF8Encoding(true)); break;
-            case "TSV": File.WriteAllText(output, ToDelimited(rows, '\t'), new UTF8Encoding(true)); break;
-            case "JSON": File.WriteAllText(output, ToJson(rows), Encoding.UTF8); break;
-            case "HTML": File.WriteAllText(output, ToHtml(Path.GetFileNameWithoutExtension(path), rows), Encoding.UTF8); break;
+            case "XLSX": WriteXlsx(output.TemporaryPath, rows); break;
+            case "CSV": File.WriteAllText(output.TemporaryPath, ToDelimited(rows, ','), new UTF8Encoding(true)); break;
+            case "TSV": File.WriteAllText(output.TemporaryPath, ToDelimited(rows, '\t'), new UTF8Encoding(true)); break;
+            case "JSON": File.WriteAllText(output.TemporaryPath, ToJson(rows), Encoding.UTF8); break;
+            case "HTML": File.WriteAllText(output.TemporaryPath, ToHtml(Path.GetFileNameWithoutExtension(path), rows), Encoding.UTF8); break;
         }
-        ctx.Outputs.Add(output);
+        output.Commit(ctx);
     });
 
     static List<List<string>> Read(string path)
@@ -55,9 +59,25 @@ public static class SheetOps
 
     static char DetectDelimiter(string text)
     {
-        var firstLine = text.Split('\n').FirstOrDefault() ?? "";
-        // German Excel exports use semicolons.
-        return firstLine.Count(c => c == ';') > firstLine.Count(c => c == ',') ? ';' : ',';
+        int commas = 0, semicolons = 0;
+        bool quoted = false;
+        for (int i = 0; i < text.Length; i++)
+        {
+            char c = text[i];
+            if (c == '"')
+            {
+                if (quoted && i + 1 < text.Length && text[i + 1] == '"') i++;
+                else quoted = !quoted;
+            }
+            else if (!quoted)
+            {
+                if (c is '\r' or '\n') break;
+                if (c == ',') commas++;
+                if (c == ';') semicolons++;
+            }
+        }
+        // German Excel exports use semicolons; quoted content is not a separator.
+        return semicolons > commas ? ';' : ',';
     }
 
     public static List<List<string>> ParseDelimited(string text, char delim)
@@ -65,10 +85,11 @@ public static class SheetOps
         var rows = new List<List<string>>();
         var row = new List<string>();
         var field = new StringBuilder();
-        bool quoted = false;
-        for (int i = 0; i < text.Length; i++)
+        bool quoted = false, rowStarted = false;
+        for (int i = text.StartsWith('\uFEFF') ? 1 : 0; i < text.Length; i++)
         {
             char c = text[i];
+            rowStarted = true;
             if (quoted)
             {
                 if (c == '"' && i + 1 < text.Length && text[i + 1] == '"') { field.Append('"'); i++; }
@@ -82,11 +103,12 @@ public static class SheetOps
                 if (c == '\r' && i + 1 < text.Length && text[i + 1] == '\n') i++;
                 row.Add(field.ToString()); field.Clear();
                 rows.Add(row); row = new List<string>();
+                rowStarted = false;
             }
             else field.Append(c);
         }
-        if (field.Length > 0 || row.Count > 0) { row.Add(field.ToString()); rows.Add(row); }
-        if (rows.Count > 0 && rows[0].Count > 0 && rows[0][0].StartsWith('﻿')) rows[0][0] = rows[0][0][1..];
+        if (quoted) throw new FormatException("The file ends inside a quoted field. Close the quote before converting it.");
+        if (rowStarted) { row.Add(field.ToString()); rows.Add(row); }
         return rows;
     }
 
@@ -104,41 +126,100 @@ public static class SheetOps
 
     static void WriteXlsx(string path, List<List<string>> rows)
     {
-        using var wb = new XLWorkbook();
-        var ws = wb.Worksheets.Add("Sheet1");
-        for (int r = 0; r < rows.Count; r++)
-        for (int c = 0; c < rows[r].Count; c++)
-        {
-            var v = rows[r][c];
-            var cell = ws.Cell(r + 1, c + 1);
-            // Keep leading-zero values (postcodes, IDs) as text.
-            bool leadingZero = v.Length > 1 && v[0] == '0' && v[1] != '.';
-            if (r > 0 && !leadingZero && double.TryParse(v, NumberStyles.Float, CultureInfo.InvariantCulture, out var d))
-                cell.Value = d;
-            else cell.Value = v;
-        }
+        if (rows.Count > 1048576 || rows.Any(row => row.Count > 16384))
+            throw new FormatException("XLSX supports at most 1048576 rows and 16384 columns.");
+        if (rows.Any(row => row.Any(value => value.Length > 32767)))
+            throw new FormatException("XLSX cells support at most 32767 UTF-16 characters.");
+
+        using var document = SpreadsheetDocument.Create(path, SpreadsheetDocumentType.Workbook);
+        var workbook = document.AddWorkbookPart();
+        workbook.Workbook = new S.Workbook(new S.BookViews(new S.WorkbookView()));
+        var styles = workbook.AddNewPart<WorkbookStylesPart>();
+        styles.Stylesheet = new S.Stylesheet(
+            new S.Fonts(new S.Font(new S.FontSize { Val = 11 }, new S.FontName { Val = "Calibri" }),
+                        new S.Font(new S.Bold(), new S.FontSize { Val = 11 }, new S.FontName { Val = "Calibri" })),
+            new S.Fills(new S.Fill(new S.PatternFill { PatternType = S.PatternValues.None }),
+                        new S.Fill(new S.PatternFill { PatternType = S.PatternValues.Gray125 })),
+            new S.Borders(new S.Border()),
+            new S.CellStyleFormats(new S.CellFormat()),
+            new S.CellFormats(new S.CellFormat { FontId = 0, FillId = 0, BorderId = 0, NumberFormatId = 49 },
+                              new S.CellFormat { FontId = 1, FillId = 0, BorderId = 0, NumberFormatId = 49, ApplyFont = true }),
+            new S.CellStyles(new S.CellStyle { Name = "Normal", FormatId = 0, BuiltinId = 0 }));
+        var strings = workbook.AddNewPart<SharedStringTablePart>();
+        strings.SharedStringTable = new S.SharedStringTable();
+        var stringIndexes = new Dictionary<string, int>(StringComparer.Ordinal);
+        var sheet = workbook.AddNewPart<WorksheetPart>();
+        sheet.Worksheet = new S.Worksheet();
         if (rows.Count > 0)
+            sheet.Worksheet.Append(new S.SheetViews(new S.SheetView(new S.Pane {
+                VerticalSplit = 1, TopLeftCell = "A2", ActivePane = S.PaneValues.BottomLeft, State = S.PaneStateValues.Frozen
+            }) { WorkbookViewId = 0 }));
+        int columns = rows.Count == 0 ? 0 : rows.Max(row => row.Count);
+        if (columns > 0)
         {
-            ws.Row(1).Style.Font.Bold = true;
-            ws.SheetView.FreezeRows(1);
+            var widths = new S.Columns();
+            for (int c = 0; c < columns; c++)
+            {
+                int length = rows.Take(200).Where(row => c < row.Count)
+                    .SelectMany(row => row[c].Split('\r', '\n')).Select(value => value.Length).DefaultIfEmpty(0).Max();
+                widths.Append(new S.Column { Min = (uint)c + 1, Max = (uint)c + 1, Width = Math.Clamp(length + 2, 6, 60), CustomWidth = true });
+            }
+            sheet.Worksheet.Append(widths);
         }
-        ws.Columns().AdjustToContents(1, Math.Min(rows.Count, 200), 6, 60);
-        wb.SaveAs(path);
+        var data = sheet.Worksheet.AppendChild(new S.SheetData());
+        for (int r = 0; r < rows.Count; r++)
+        {
+            var row = data.AppendChild(new S.Row { RowIndex = (uint)r + 1 });
+            for (int c = 0; c < rows[r].Count; c++)
+            {
+                string value = rows[r][c];
+                if (!stringIndexes.TryGetValue(value, out int index))
+                {
+                    index = stringIndexes.Count;
+                    stringIndexes.Add(value, index);
+                    strings.SharedStringTable.Append(new S.SharedStringItem(new S.Text(EncodeXlsxText(value)) { Space = SpaceProcessingModeValues.Preserve }));
+                }
+                row.Append(new S.Cell {
+                    CellReference = XLHelper.GetColumnLetterFromNumber(c + 1) + (r + 1).ToString(CultureInfo.InvariantCulture),
+                    DataType = S.CellValues.SharedString, StyleIndex = r == 0 ? 1U : 0U,
+                    CellValue = new S.CellValue(index.ToString(CultureInfo.InvariantCulture))
+                });
+            }
+        }
+        workbook.Workbook.AppendChild(new S.Sheets()).Append(new S.Sheet { Id = workbook.GetIdOfPart(sheet), SheetId = 1, Name = "Sheet1" });
+    }
+
+    // SpreadsheetML ST_Xstring also escapes CR and literal _xHHHH_ sequences, beyond XML escaping.
+    static string EncodeXlsxText(string value)
+    {
+        value = Regex.Replace(value, "_(?=x[0-9A-Fa-f]{4}_)", "_x005F_");
+        var result = new StringBuilder(value.Length);
+        for (int i = 0; i < value.Length; i++)
+        {
+            char c = value[i];
+            if (c != '\r' && XmlConvert.IsXmlChar(c)) result.Append(c);
+            else if (char.IsHighSurrogate(c) && i + 1 < value.Length && char.IsLowSurrogate(value[i + 1]))
+                result.Append(c).Append(value[++i]);
+            else result.Append("_x").Append(((int)c).ToString("X4", CultureInfo.InvariantCulture)).Append('_');
+        }
+        return result.ToString();
     }
 
     static string ToJson(List<List<string>> rows)
     {
         if (rows.Count == 0) return "[]";
         var header = rows[0].Select((h, i) => string.IsNullOrWhiteSpace(h) ? $"column{i + 1}" : h).ToList();
-        var list = rows.Skip(1).Select(r =>
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var name in header)
+            if (!names.Add(name))
+                throw new FormatException($"The header '{name}' occurs more than once. JSON needs a unique name for every column.");
+        var list = rows.Skip(1).Select((r, index) =>
         {
-            var obj = new Dictionary<string, object?>();
+            if (r.Count > header.Count)
+                throw new FormatException($"Row {index + 2} has {r.Count} cells, but the header has {header.Count}. JSON needs a header for every column.");
+            var obj = new Dictionary<string, string>();
             for (int i = 0; i < header.Count; i++)
-            {
-                var v = i < r.Count ? r[i] : "";
-                bool leadingZero = v.Length > 1 && v[0] == '0' && v[1] != '.';
-                obj[header[i]] = !leadingZero && double.TryParse(v, NumberStyles.Float, CultureInfo.InvariantCulture, out var d) && v.Trim().Length > 0 ? d : v;
-            }
+                obj[header[i]] = i < r.Count ? r[i] : "";
             return obj;
         }).ToList();
         return JsonSerializer.Serialize(list, new JsonSerializerOptions { WriteIndented = true, Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping });
@@ -165,7 +246,7 @@ public static class SubtitleOps
     public static Task Convert(string path, string target, OpContext ctx) => Task.Run(() =>
     {
         var text = File.ReadAllText(path).Replace("\r\n", "\n");
-        var output = Output.For(path, target.ToLowerInvariant());
+        using var output = Output.For(path, target.ToLowerInvariant());
         string result = target.ToUpperInvariant() switch
         {
             "VTT" => "WEBVTT\n\n" + Regex.Replace(text.TrimStart('﻿'), @"(\d{2}:\d{2}:\d{2}),(\d{3})", "$1.$2"),
@@ -173,8 +254,8 @@ public static class SubtitleOps
             "TXT" => ToText(text),
             _ => throw new NotSupportedException(target),
         };
-        File.WriteAllText(output, result.Replace("\n", "\r\n"), Encoding.UTF8);
-        ctx.Outputs.Add(output);
+        File.WriteAllText(output.TemporaryPath, result.Replace("\n", "\r\n"), Encoding.UTF8);
+        output.Commit(ctx);
     });
 
     static readonly Regex Cue = new(@"(?:(\d{2}):)?(\d{2}):(\d{2})[\.,](\d{3})\s*-->\s*(?:(\d{2}):)?(\d{2}):(\d{2})[\.,](\d{3})[^\n]*", RegexOptions.Compiled);
@@ -235,9 +316,9 @@ public static class ArchiveOps
 
     public static Task Extract(string path, OpContext ctx) => Task.Run(() =>
     {
-        var dir = Output.Unique(Path.Combine(Path.GetDirectoryName(path)!, BaseName(path)));
-        ExtractTo(path, dir);
-        ctx.Outputs.Add(dir);
+        using var output = Output.FolderAt(Path.Combine(Path.GetDirectoryName(path)!, BaseName(path)));
+        ExtractTo(path, output.TemporaryPath);
+        output.Commit(ctx);
     });
 
     static void ExtractTo(string path, string dir)
@@ -277,9 +358,9 @@ public static class ArchiveOps
         {
             ExtractTo(path, temp);
             var ext = target.ToUpperInvariant() switch { "ZIP" => "zip", "TAR" => "tar", _ => "tar.gz" };
-            var output = Output.Unique(Path.Combine(Path.GetDirectoryName(path)!, BaseName(path) + "." + ext));
-            Pack(temp, output, includeBaseDir: false);
-            ctx.Outputs.Add(output);
+            using var output = Output.FileAt(Path.Combine(Path.GetDirectoryName(path)!, BaseName(path) + "." + ext));
+            Pack(temp, output.TemporaryPath, includeBaseDir: false);
+            output.Commit(ctx);
         }
         finally { try { Directory.Delete(temp, true); } catch { } }
     });
@@ -290,14 +371,14 @@ public static class ArchiveOps
         var first = ctx.Paths[0].TrimEnd('\\');
         var parent = Path.GetDirectoryName(first)!;
         string name = ctx.Paths.Count == 1 ? Path.GetFileNameWithoutExtension(first) : (Path.GetFileName(parent) is { Length: > 0 } parentName ? parentName : "Archive");
-        var output = Output.Unique(Path.Combine(parent, name + ".zip"));
+        using var output = Output.FileAt(Path.Combine(parent, name + ".zip"));
         if (ctx.Paths.Count == 1 && Directory.Exists(first))
         {
-            ZipFile.CreateFromDirectory(first, output, CompressionLevel.Optimal, includeBaseDirectory: true);
+            ZipFile.CreateFromDirectory(first, output.TemporaryPath, CompressionLevel.Optimal, includeBaseDirectory: true);
         }
         else
         {
-            using var zip = ZipFile.Open(output, ZipArchiveMode.Create);
+            using var zip = ZipFile.Open(output.TemporaryPath, ZipArchiveMode.Create);
             int i = 0;
             foreach (var p in ctx.Paths)
             {
@@ -311,7 +392,7 @@ public static class ArchiveOps
                 ctx.Progress(++i / (double)ctx.Paths.Count);
             }
         }
-        ctx.Outputs.Add(output);
+        output.Commit(ctx);
     });
 
     static void Pack(string dir, string output, bool includeBaseDir)
