@@ -55,6 +55,7 @@ public static class SelfTest
                 }
             }
         }
+        failures += await MediaSelfTest.Run(Path.Combine(dir, "media-speed"), report);
         report.AppendLine().AppendLine($"{failures} failure(s)");
         File.WriteAllText(Path.Combine(dir, "selftest.txt"), report.ToString());
         return failures;

@@ -65,7 +65,7 @@ public static class MediaOps
 
     public static Task DoubleSpeed(string path, IProgress<double> p, OpContext ctx) =>
         Ffmpeg(path, Output.For(path, "mp4", " (2x)"),
-            "-filter_complex \"[0:v]setpts=0.5*PTS[v];[0:a]atempo=2.0[a]\" -map \"[v]\" -map \"[a]?\" -c:v libx264 -crf 23 -preset medium -pix_fmt yuv420p -c:a aac -b:a 160k", p, ctx);
+            "-map 0:v:0 -map 0:a:0? -vf setpts=0.5*PTS -af atempo=2.0 -c:v libx264 -crf 23 -preset medium -pix_fmt yuv420p -c:a aac -b:a 160k", p, ctx);
 
     public static Task Snapshot(string path, IProgress<double> p, OpContext ctx) =>
         Ffmpeg(path, Output.For(path, "png", " (frame)"), "-frames:v 1 -update 1", p, ctx, preInput: "-ss 1");
